@@ -61,7 +61,7 @@ impl App {
         self.start_request(
             &id,
             &run_label(&action),
-            &action.full_prompt(now_secs()),
+            &action.full_prompt(now_secs(), &self.tasks.recently_done()),
             RunKind::Action,
         );
         if self.run.is_some()

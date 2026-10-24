@@ -24,11 +24,12 @@ use crate::ui::widgets;
 use super::App;
 
 /// The pages, in order; each is saved once it has settled.
-const STEPS: [&str; 10] = [
+const STEPS: [&str; 11] = [
     "chat",
     "chat-two-lines",
     "chat-long",
     "tasks",
+    "tasks-reply",
     "plan",
     "slack-list",
     "slack-conversation",
@@ -103,6 +104,13 @@ impl App {
             "tasks" => {
                 self.chat.chat().set_draft("");
                 self.handle(UiEvent::ShowTasks);
+            }
+            "tasks-reply" => {
+                // The first task asks whether to draft a reply; never ticked for real.
+                if let Some(id) = self.chat.tasks().id_at(0) {
+                    self.pending_done = Some((id, Instant::now() + Duration::from_secs(3600)));
+                    self.tasks_changed();
+                }
             }
             "plan" => self.handle(UiEvent::QuickAction(0)),
             "slack-list" => {

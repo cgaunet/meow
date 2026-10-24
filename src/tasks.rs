@@ -14,6 +14,10 @@ pub const DONE_TTL_SECS: u64 = 30 * 24 * 60 * 60;
 const MAX_FOUND: usize = 50;
 const MAX_TITLE_CHARS: usize = 200;
 const MANUAL_SOURCE: &str = "Me";
+/// Slack messages that need no answer, so "ok" or "super merci" never becomes a task.
+pub const SLACK_NO_REPLY_RULE: &str = "On Slack, a message that only acknowledges, thanks, \
+     agrees or wraps up (\"ok\", \"thanks\", \"super merci\", \"parfait\", a thumbs up), in any \
+     language, needs no answer and is never a task.";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Task {
@@ -220,9 +224,10 @@ impl TaskList {
         })
     }
 
-    /// Tasks done lately, most recent first, so a check does not report them again.
-    pub fn recently_done(&self, limit: usize) -> Vec<&Task> {
-        self.completed().into_iter().take(limit).collect()
+    /// Every task done within [`DONE_TTL_SECS`], most recent first, so a check
+    /// does not report them again.
+    pub fn recently_done(&self) -> Vec<&Task> {
+        self.completed()
     }
 
     pub fn get(&self, id: &str) -> Option<&Task> {
@@ -344,13 +349,49 @@ pub fn chat_prompt(task: &Task, message: &str) -> String {
     )
 }
 
+/// What the user says when they tick a task as done and want the person who
+/// asked to know: Claude drafts the reply where the request was made, never sends it.
+pub const DONE_REPLY_REQUEST: &str = "Done. Draft my reply to say so.";
+
+/// The instruction behind [`DONE_REPLY_REQUEST`].
+pub fn done_reply_prompt() -> String {
+    format!(
+        "{DONE_REPLY_REQUEST}\n\nI have done what this task asks. Find the original request \
+         (the Slack message or thread, the email, the issue) and who made it, then prepare a \
+         short reply in my name saying it is done, with the useful detail (new time, link, \
+         result), in the language of the conversation. Leave it as a draft where the request \
+         was made: a Slack draft in the same DM or thread (`slack_send_message_draft`, with \
+         `thread_ts` for a thread), or a Gmail draft in the same thread. Never send or post \
+         anything. If you cannot tell who asked or where, ask me instead of guessing. Then tell \
+         me in one line where the draft is."
+    )
+}
+
+/// Tells a quick action which tasks I have dealt with, so it leaves them out;
+/// empty when there are none.
+pub fn handled_instruction(handled: &[&Task]) -> String {
+    if handled.is_empty() {
+        return String::new();
+    }
+    let handled: Vec<_> = handled
+        .iter()
+        .map(|t| serde_json::json!({"title": t.title, "source": t.source, "url": t.url}))
+        .collect();
+    format!(
+        "I have already dealt with these, ticked off in my task list: leave them out of your \
+         answer, including the same message, issue or pull request under another title or \
+         link, unless something new happened since (JSON):\n{}",
+        serde_json::Value::Array(handled)
+    )
+}
+
 /// Asks Claude to report the actionable items of its answer as tasks.
 pub fn report_instruction() -> String {
     format!(
         "At the very end of your answer, add a fenced code block with the info string \
          `{TASKS_FENCE}` holding a JSON array of the things I need to act on (not meetings or \
          FYIs), one object each: {{\"title\": short imperative title, \"source\": where it comes \
-         from (Linear, GitHub, Slack, Gmail…), \"url\": its link or null}}."
+         from (Linear, GitHub, Slack, Gmail…), \"url\": its link or null}}. {SLACK_NO_REPLY_RULE}"
     )
 }
 
@@ -368,6 +409,12 @@ mod tests {
 
     fn titles(list: &TaskList) -> Vec<&str> {
         list.display().iter().map(|t| t.title.as_str()).collect()
+    }
+
+    #[test]
+    fn report_leaves_out_slack_messages_that_need_no_answer() {
+        assert!(report_instruction().contains(SLACK_NO_REPLY_RULE));
+        assert!(SLACK_NO_REPLY_RULE.contains("super merci"));
     }
 
     #[test]

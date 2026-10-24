@@ -15,14 +15,16 @@ use std::rc::Rc;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2::runtime::AnyObject;
-use objc2::{MainThreadMarker, MainThreadOnly};
+use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol, ProtocolObject};
+use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send};
 use objc2_app_kit::{NSBackingStoreType, NSWindow, NSWindowStyleMask};
 use objc2_foundation::{
     NSArray, NSBundle, NSError, NSHTTPCookie, NSPoint, NSRect, NSSize, NSString, NSURL,
     NSURLRequest,
 };
-use objc2_web_kit::{WKWebView, WKWebViewConfiguration};
+use objc2_web_kit::{
+    WKNavigationAction, WKUIDelegate, WKWebView, WKWebViewConfiguration, WKWindowFeatures,
+};
 
 use meow::slack::auth::{self, Credentials};
 
@@ -52,10 +54,46 @@ const READ_SCRIPT: &str = "JSON.stringify({c: localStorage.getItem('localConfig_
     t: (location.pathname.match(/\\/client\\/(T[A-Z0-9]+)/) || [])[1] || location.host.split('.')[0], \
     u: navigator.userAgent, p: location.host + location.pathname})";
 
+define_class!(
+    /// Opens links that ask for a new window (Slack's workspace SSO button)
+    /// in the sign-in view itself: a bare web view ignores them.
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "MeowSignInUIDelegate"]
+    struct NewWindowsInPlace;
+
+    unsafe impl NSObjectProtocol for NewWindowsInPlace {}
+
+    unsafe impl WKUIDelegate for NewWindowsInPlace {
+        #[unsafe(method_id(webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:))]
+        fn create_web_view(
+            &self,
+            web_view: &WKWebView,
+            _configuration: &WKWebViewConfiguration,
+            navigation_action: &WKNavigationAction,
+            _window_features: &WKWindowFeatures,
+        ) -> Option<Retained<WKWebView>> {
+            // SAFETY: WebKit calls this on the main thread with a live action and view.
+            unsafe { web_view.loadRequest(&navigation_action.request()) };
+            None
+        }
+    }
+);
+
+impl NewWindowsInPlace {
+    fn new(mtm: MainThreadMarker) -> Retained<Self> {
+        let this = Self::alloc(mtm).set_ivars(());
+        // SAFETY: NSObject's initializer, called once on a fresh allocation.
+        unsafe { msg_send![super(this), init] }
+    }
+}
+
 /// An in-progress sign-in window.
 pub struct SignIn {
     window: Retained<NSWindow>,
     webview: Retained<WKWebView>,
+    /// The view's UI delegate, which the view does not retain.
+    _ui_delegate: Retained<NewWindowsInPlace>,
     /// The `localConfig_v2` value, once read.
     config_json: Rc<RefCell<Option<String>>>,
     /// Which workspace is active (team id or subdomain), to pick the right one.
@@ -83,6 +121,9 @@ impl SignIn {
         };
         // SAFETY: a plain string property; setting it before any load takes effect.
         unsafe { webview.setCustomUserAgent(Some(&NSString::from_str(&user_agent()))) };
+        let ui_delegate = NewWindowsInPlace::new(mtm);
+        // SAFETY: the delegate is kept alive in `SignIn` as long as the view.
+        unsafe { webview.setUIDelegate(Some(ProtocolObject::from_ref(&*ui_delegate))) };
 
         let style = NSWindowStyleMask::Titled
             | NSWindowStyleMask::Closable
@@ -114,6 +155,7 @@ impl SignIn {
         Self {
             window,
             webview,
+            _ui_delegate: ui_delegate,
             config_json: Rc::new(RefCell::new(None)),
             hint: Rc::new(RefCell::new(None)),
             logged_ua: Rc::new(RefCell::new(false)),

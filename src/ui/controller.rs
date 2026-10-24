@@ -191,6 +191,20 @@ define_class!(
             }
         }
 
+        #[unsafe(method(draftDoneReply:))]
+        fn draft_done_reply(&self, sender: Option<&AnyObject>) {
+            if let Some(row) = sender_tag(sender) {
+                push(UiEvent::DraftDoneReply(row));
+            }
+        }
+
+        #[unsafe(method(noDoneReply:))]
+        fn no_done_reply(&self, sender: Option<&AnyObject>) {
+            if let Some(row) = sender_tag(sender) {
+                push(UiEvent::NoDoneReply(row));
+            }
+        }
+
         #[unsafe(method(toggleCompleted:))]
         fn toggle_completed(&self, _sender: Option<&AnyObject>) {
             push(UiEvent::ToggleCompleted);

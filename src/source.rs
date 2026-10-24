@@ -320,17 +320,21 @@ const GITHUB: [&str; ICON_PIXELS] = [
     "w..w..w...",
     ".ww...w...",
 ];
+/// The mark: a disc whose lower left is cut by three parallel diagonal gaps
+/// into strips, beside one large piece. Strips and gaps one pixel wide would
+/// make a checkerboard, so the strips are two wide and the gaps one, and the
+/// smallest strip is a one-pixel line along the rim.
 const LINEAR: [&str; ICON_PIXELS] = [
-    "...bbbb...",
-    ".b..bbbbb.",
-    ".bb..bbbb.",
-    "bbbb..bbbb",
-    "bbbbb..bbb",
-    "bbbbbb..bb",
-    "bbbbbbb..b",
-    ".bbbbbbb..",
-    ".bbbbbbbb.",
-    "...bbbb...",
+    "...wwww...",
+    ".w.wwwwww.",
+    ".ww.wwwww.",
+    "w.ww.wwwww",
+    "ww.ww.wwww",
+    ".ww.ww.www",
+    "w.ww.ww.ww",
+    ".w.ww.ww..",
+    "..w.ww.ww.",
+    "...w.ww...",
 ];
 const MAIL: [&str; ICON_PIXELS] = [
     "..........",

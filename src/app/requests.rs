@@ -68,7 +68,7 @@ impl App {
     }
 
     /// A task's conversation starts by telling Claude which task it is about.
-    fn prompt_for(&self, id: &ChatId, text: &str) -> String {
+    pub(super) fn prompt_for(&self, id: &ChatId, text: &str) -> String {
         let fresh = self.conversations.current().session.is_none();
         match id {
             ChatId::Task(task) if fresh => match self.tasks.get(task) {

@@ -91,6 +91,9 @@ struct App {
     chat: ChatWindow,
     conversations: Conversations,
     tasks: TaskList,
+    /// A task just ticked on the tasks page, waiting for "draft reply" or
+    /// "no reply" until this deadline, after which it is done with no reply.
+    pending_done: Option<(String, Instant)>,
     /// Where tasks are saved; `None` when the file could not be read, so it is never overwritten.
     tasks_path: Option<PathBuf>,
     action_results: ActionResults,
@@ -241,6 +244,7 @@ pub fn start(mtm: MainThreadMarker) {
         chat,
         conversations,
         tasks: task_list,
+        pending_done: None,
         tasks_path,
         action_results,
         results_path,
@@ -389,6 +393,7 @@ impl App {
         self.poll_voice();
         self.poll_calendar_probe();
         self.poll_sync();
+        self.poll_pending_done();
         self.poll_schedule();
         self.poll_agenda();
         self.poll_rsvp();
@@ -573,6 +578,8 @@ impl App {
             }
             UiEvent::AddTask => self.add_task(),
             UiEvent::ToggleTask(row) => self.toggle_task(row),
+            UiEvent::DraftDoneReply(row) => self.draft_done_reply(row),
+            UiEvent::NoDoneReply(row) => self.no_done_reply(row),
             UiEvent::ToggleCompleted => {
                 self.chat.tasks().toggle_completed();
                 self.chat.render_tasks(&self.tasks, now_secs());

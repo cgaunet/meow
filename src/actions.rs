@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::schedule::DailyTime;
+use crate::tasks::{SLACK_NO_REPLY_RULE, Task};
 
 const MAX_ACTIONS: usize = 12;
 
@@ -33,14 +34,20 @@ pub struct QuickAction {
 }
 
 impl QuickAction {
-    /// The prompt sent to Claude: the action's own text, plus the request to
-    /// report actionable items, as tasks or as a day plan whose items become tasks.
-    pub fn full_prompt(&self, now: u64) -> String {
+    /// The prompt sent to Claude: the action's own text, the tasks I have
+    /// already dealt with, and the request to report actionable items, as
+    /// tasks or as a day plan whose items become tasks.
+    pub fn full_prompt(&self, now: u64, handled: &[&Task]) -> String {
         let report = match self.layout {
             Layout::Text => crate::tasks::report_instruction(),
             Layout::Plan => crate::plan::instruction(now),
         };
-        format!("{}\n\n{report}", self.prompt)
+        let handled = crate::tasks::handled_instruction(handled);
+        if handled.is_empty() {
+            format!("{}\n\n{report}", self.prompt)
+        } else {
+            format!("{}\n\n{handled}\n\n{report}", self.prompt)
+        }
     }
 
     fn new(title: &str, prompt: &str) -> Self {
@@ -77,11 +84,10 @@ const GITHUB: (&str, &str) = (
     "pull requests waiting for my review, and my open pull requests with failing checks, \
      requested changes or unresolved comments.",
 );
-const SLACK: (&str, &str) = (
-    "Slack",
-    "DMs and threads or mentions since yesterday where I owe a reply. A later message of mine \
-     in the same DM or channel, in the thread or not, or a reaction, counts as a reply.",
-);
+/// The Slack source's task, completed with [`SLACK_NO_REPLY_RULE`].
+const SLACK_OWED: &str = "DMs and threads or mentions since yesterday where I owe a reply. A \
+     later message of mine in the same DM or channel, in the thread or not, or a reaction, counts \
+     as a reply.";
 const GMAIL: (&str, &str) = (
     "Gmail",
     "unread or important emails from the last day, and emails waiting for my answer.",
@@ -95,6 +101,8 @@ pub const TODAYS_PLANNING: &str = "Today's planning";
 pub const LEGACY_PLANNING: &str = "Morning planning";
 
 pub fn defaults() -> Vec<QuickAction> {
+    let slack_task = format!("{SLACK_OWED} {SLACK_NO_REPLY_RULE}");
+    let slack = ("Slack", slack_task.as_str());
     vec![
         QuickAction {
             layout: Layout::Plan,
@@ -112,7 +120,7 @@ pub fn defaults() -> Vec<QuickAction> {
                         ),
                         LINEAR,
                         GITHUB,
-                        SLACK,
+                        slack,
                         GMAIL,
                     ],
                     "combine their findings into my plan for the day: the agenda, the 3 \
@@ -124,7 +132,7 @@ pub fn defaults() -> Vec<QuickAction> {
             "Pending tasks",
             &fan_out(
                 "List everything waiting on me.",
-                &[LINEAR, GITHUB, SLACK, GMAIL],
+                &[LINEAR, GITHUB, slack, GMAIL],
                 "group the items by source, most urgent first, one line per item with a link \
                  when there is one.",
             ),
@@ -230,10 +238,38 @@ mod tests {
     }
 
     #[test]
+    fn slack_source_skips_messages_that_need_no_answer() {
+        for action in defaults() {
+            assert!(
+                action.prompt.contains(SLACK_NO_REPLY_RULE),
+                "{}",
+                action.title
+            );
+        }
+    }
+
+    #[test]
     fn every_action_asks_claude_to_report_tasks() {
         let custom = QuickAction::new("Inbox", "Summarize my inbox");
-        assert!(custom.full_prompt(0).starts_with("Summarize my inbox"));
-        assert!(custom.full_prompt(0).contains(crate::tasks::TASKS_FENCE));
+        assert!(custom.full_prompt(0, &[]).starts_with("Summarize my inbox"));
+        assert!(
+            custom
+                .full_prompt(0, &[])
+                .contains(crate::tasks::TASKS_FENCE)
+        );
+    }
+
+    #[test]
+    fn actions_leave_out_tasks_already_dealt_with() {
+        let mut list = crate::tasks::TaskList::default();
+        list.add_manual("Reply to Marine", 0);
+        let id = list.display()[0].id.clone();
+        list.set_done(&id, true, 1);
+        let action = QuickAction::new("Inbox", "Summarize my inbox");
+        let prompt = action.full_prompt(0, &list.recently_done());
+        assert!(prompt.contains("already dealt with"));
+        assert!(prompt.contains("Reply to Marine"));
+        assert!(!action.full_prompt(0, &[]).contains("already dealt with"));
     }
 
     #[test]
@@ -241,7 +277,7 @@ mod tests {
         let morning = &defaults()[0];
         assert_eq!(morning.layout, Layout::Plan);
         assert_eq!(morning.daily_at, Some(DailyTime::new(7, 0)));
-        let prompt = morning.full_prompt(0);
+        let prompt = morning.full_prompt(0, &[]);
         assert!(prompt.contains(crate::plan::PLAN_FENCE));
         assert!(!prompt.contains(crate::tasks::TASKS_FENCE));
         assert_eq!(defaults()[1].daily_at, None);

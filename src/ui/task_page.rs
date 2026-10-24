@@ -32,6 +32,8 @@ const HEADER_HEIGHT: f64 = 30.0;
 const GROUP_GAP: f64 = 12.0;
 const CHECKBOX_WIDTH: f64 = 22.0;
 const CHAT_WIDTH: f64 = 64.0;
+const DRAFT_REPLY_WIDTH: f64 = 120.0;
+const NO_REPLY_WIDTH: f64 = 96.0;
 const INDENT: f64 = 6.0;
 const TOGGLE_WIDTH: f64 = 180.0;
 
@@ -45,6 +47,8 @@ pub struct TaskPage {
     shown_ids: RefCell<Vec<String>>,
     /// Whether the completed tasks are listed under the open ones.
     show_completed: Cell<bool>,
+    /// The task just ticked, whose row asks whether to draft a reply.
+    pending: RefCell<Option<String>>,
     mtm: MainThreadMarker,
 }
 
@@ -110,6 +114,7 @@ impl TaskPage {
             target: controller.clone(),
             shown_ids: RefCell::new(Vec::new()),
             show_completed: Cell::new(false),
+            pending: RefCell::new(None),
             mtm,
         }
     }
@@ -127,6 +132,11 @@ impl TaskPage {
     /// The id of the task in row `index`, as last rendered.
     pub fn id_at(&self, index: usize) -> Option<String> {
         self.shown_ids.borrow().get(index).cloned()
+    }
+
+    /// Which task's row offers "draft reply" and "no reply", from the next render.
+    pub fn set_pending(&self, id: Option<String>) {
+        self.pending.replace(id);
     }
 
     pub fn toggle_completed(&self) {
@@ -252,14 +262,20 @@ impl TaskPage {
         widgets::paint(&card, Some(&fill), None);
         self.list.addSubview(&card);
 
+        let pending = self.pending.borrow().as_deref() == Some(task.id.as_str());
         // The controller is an app-lifetime target that implements `toggleTask:`.
-        let checkbox = widgets::checkbox(self.mtm, target, sel!(toggleTask:), task.is_done());
+        let ticked = task.is_done() || pending;
+        let checkbox = widgets::checkbox(self.mtm, target, sel!(toggleTask:), ticked);
         checkbox.setTag(index as isize);
         checkbox.setFrame(rect(CARD_PADDING, 0.0, CHECKBOX_WIDTH, CARD_HEIGHT));
         card.addSubview(&checkbox);
 
         let x = CARD_PADDING + CHECKBOX_WIDTH + INDENT;
-        let chat_x = width - CARD_PADDING - CHAT_WIDTH;
+        let chat_x = if pending {
+            width - CARD_PADDING - DRAFT_REPLY_WIDTH - INDENT - NO_REPLY_WIDTH
+        } else {
+            width - CARD_PADDING - CHAT_WIDTH
+        };
         let title = LinkButton::new(
             self.mtm,
             rect(x, 0.0, chat_x - x - INDENT, CARD_HEIGHT),
@@ -280,6 +296,9 @@ impl TaskPage {
         title.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         card.addSubview(&title);
 
+        if pending {
+            return self.add_reply_choice(&card, index, chat_x);
+        }
         let chat = widgets::text_button(
             self.mtm,
             "Chat",
@@ -299,6 +318,37 @@ impl TaskPage {
         ));
         chat.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
         card.addSubview(&chat);
+    }
+
+    /// In place of "Chat" on a task just ticked: "Draft reply" and "No reply".
+    fn add_reply_choice(&self, card: &FlippedView, index: usize, x: f64) {
+        let target: &AnyObject = &self.target;
+        let buttons = [
+            (
+                "Draft reply",
+                widgets::ButtonStyle::Primary,
+                sel!(draftDoneReply:),
+                DRAFT_REPLY_WIDTH,
+                "Claude drafts the reply telling whoever asked that it is done (never sent)",
+            ),
+            (
+                "No reply",
+                widgets::ButtonStyle::Quiet,
+                sel!(noDoneReply:),
+                NO_REPLY_WIDTH,
+                "Seen together or nothing to answer (chosen after a few seconds)",
+            ),
+        ];
+        let mut x = x;
+        for (label, style, action, width, tip) in buttons {
+            let button = widgets::text_button(self.mtm, label, style, target, action);
+            button.setTag(index as isize);
+            button.setToolTip(Some(&NSString::from_str(tip)));
+            button.setFrame(rect(x, (CARD_HEIGHT - ROW_HEIGHT) / 2.0, width, ROW_HEIGHT));
+            button.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+            card.addSubview(&button);
+            x += width + INDENT;
+        }
     }
 }
 

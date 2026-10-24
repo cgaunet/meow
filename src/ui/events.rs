@@ -47,6 +47,10 @@ pub enum UiEvent {
     AddTask,
     /// Row index in the task window, as last rendered.
     ToggleTask(usize),
+    /// A task just ticked in this row: done, and Claude drafts the reply saying so.
+    DraftDoneReply(usize),
+    /// A task just ticked in this row: done, nothing to answer.
+    NoDoneReply(usize),
     /// Show or hide the completed tasks.
     ToggleCompleted,
     OpenTask(usize),

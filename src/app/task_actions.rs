@@ -1,10 +1,16 @@
 //! The task list: adding, ticking, opening, and chatting about tasks.
 
 use meow::conversations::ChatId;
-use meow::tasks::FoundTask;
+use std::time::{Duration, Instant};
+
+use meow::tasks::{self, FoundTask};
 
 use super::plan::open_url;
+use super::requests::RunKind;
 use super::{App, now_secs};
+
+/// How long a ticked task offers "draft reply" before it is done with no reply.
+const REPLY_CHOICE_TIME: Duration = Duration::from_secs(5);
 
 impl App {
     pub(super) fn add_task(&mut self) {
@@ -30,9 +36,53 @@ impl App {
         }
     }
 
+    /// Ticking an open task asks whether to tell whoever asked: the row offers
+    /// "draft reply" and "no reply" for a few seconds, then it is done with no
+    /// reply. Ticking it again meanwhile takes it back.
     pub(super) fn toggle_task(&mut self, row: usize) {
-        if let Some(id) = self.chat.tasks().id_at(row) {
-            self.toggle_task_id(&id);
+        let Some(id) = self.chat.tasks().id_at(row) else {
+            return;
+        };
+        if self
+            .pending_done
+            .as_ref()
+            .is_some_and(|(pending, _)| *pending == id)
+        {
+            self.pending_done = None;
+            self.tasks_changed();
+            return;
+        }
+        if self.tasks.get(&id).is_some_and(|t| t.is_done()) {
+            return self.toggle_task_id(&id);
+        }
+        self.finish_pending_done();
+        self.pending_done = Some((id, Instant::now() + REPLY_CHOICE_TIME));
+        self.tasks_changed();
+    }
+
+    /// Closes the reply choice once its time is up: done, no reply.
+    pub(super) fn poll_pending_done(&mut self) {
+        if self
+            .pending_done
+            .as_ref()
+            .is_some_and(|(_, deadline)| Instant::now() >= *deadline)
+        {
+            self.finish_pending_done();
+            self.tasks_changed();
+        }
+    }
+
+    pub(super) fn no_done_reply(&mut self, row: usize) {
+        if self.chat.tasks().id_at(row).is_some() {
+            self.finish_pending_done();
+            self.tasks_changed();
+        }
+    }
+
+    /// Marks the task waiting for the reply choice done, if there is one.
+    fn finish_pending_done(&mut self) {
+        if let Some((id, _)) = self.pending_done.take() {
+            self.tasks.set_done(&id, true, now_secs());
         }
     }
 
@@ -40,6 +90,25 @@ impl App {
         let done = self.tasks.get(id).is_some_and(|t| t.is_done());
         self.tasks.set_done(id, !done, now_secs());
         self.tasks_changed();
+    }
+
+    /// Ticks the task, then asks Claude, in the task's conversation, to draft
+    /// the reply telling whoever asked that it is done.
+    pub(super) fn draft_done_reply(&mut self, row: usize) {
+        let Some(id) = self.chat.tasks().id_at(row) else {
+            return;
+        };
+        if self.run.is_some() {
+            self.info("Still working on the last request (Esc to cancel).");
+            return;
+        }
+        self.pending_done = None;
+        self.tasks.set_done(&id, true, now_secs());
+        self.tasks_changed();
+        self.chat_about_task_id(&id);
+        let chat = ChatId::Task(id);
+        let prompt = self.prompt_for(&chat, &tasks::done_reply_prompt());
+        self.start_request(&chat, tasks::DONE_REPLY_REQUEST, &prompt, RunKind::Message);
     }
 
     /// Opens the task's link; a task without one opens its chat instead.
@@ -77,6 +146,8 @@ impl App {
     /// Prunes, saves and redraws the task list, and the plan whose items are tasks.
     pub(super) fn tasks_changed(&mut self) {
         self.tasks.prune(now_secs());
+        let pending = self.pending_done.as_ref().map(|(id, _)| id.clone());
+        self.chat.tasks().set_pending(pending);
         self.chat.render_tasks(&self.tasks, now_secs());
         self.render_plan();
         let Some(path) = &self.tasks_path else { return };

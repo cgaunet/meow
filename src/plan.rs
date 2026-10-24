@@ -5,7 +5,7 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::clock;
-use crate::tasks::{FoundTask, take_fence};
+use crate::tasks::{FoundTask, SLACK_NO_REPLY_RULE, take_fence};
 
 pub const PLAN_FENCE: &str = "meow-plan";
 const MAX_EVENTS: usize = 20;
@@ -357,7 +357,8 @@ pub fn instruction(now: u64) -> String {
          GitHub, Slack, Gmail…, \"url\": link or null}},\n \
          \"replies\": messages waiting for my answer, same shape without \"why\",\n \
          \"later\": anything else I need to act on, same shape}}.\n\
-         Do not repeat an item in two lists, and use empty lists when there is nothing.",
+         Do not repeat an item in two lists, and use empty lists when there is nothing. \
+         {SLACK_NO_REPLY_RULE}",
         clock::describe(now)
     )
 }
@@ -587,5 +588,6 @@ mod tests {
         let text = instruction(1_792_411_200);
         assert!(text.contains(PLAN_FENCE));
         assert!(text.starts_with("Today is "));
+        assert!(text.contains(SLACK_NO_REPLY_RULE));
     }
 }
